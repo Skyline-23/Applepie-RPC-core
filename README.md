@@ -59,8 +59,9 @@ pyinstaller \
   --clean \
   --onefile \
   --name applepie-rpc \
-  --hidden-import pypresence.types \
-  --hidden-import zeroconf.asyncio \
+  --hidden-import=pypresence.types \
+  --hidden-import=zeroconf.asyncio \
+  --add-data "$(which atvscript)":. \
   applepie-rpc.py
 ```
 

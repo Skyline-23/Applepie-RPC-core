@@ -328,7 +328,6 @@ async def atv_props(host: str) -> Optional[dict]:
     logging.debug(f"atv_props called with host: {host}")
     try:
         exe = get_atvscript_executable()
-        logging.info(f"Resolved atvscript executable: {exe}")
         proc = await asyncio.create_subprocess_exec(
             exe,
             "-s",
