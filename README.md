@@ -10,13 +10,7 @@ Standalone Python daemon that discovers playback from Apple Music (Music.app), H
 - [Prerequisites](#prerequisites)  
 - [Installation](#installation)  
 - [Building the Standalone Binary](#building-the-standalone-binary)  
-
-- [Usage](#usage)  
 - [Cache Location](#cache-location)  
-- [Configuration & Commands](#configuration--commands)  
-- [Troubleshooting](#troubleshooting)  
-- [Contributing](#contributing)  
-- [License](#license)  
 
 ---
 
@@ -56,6 +50,8 @@ pip install \
   appdirs
 ```
 
+## Building the Standalone Binary
+
 To build the standalone executable, run:
 
 ```bash
@@ -66,4 +62,14 @@ pyinstaller \
   --hidden-import pypresence.types \
   --hidden-import zeroconf.asyncio \
   applepie-rpc.py
+```
+
+---
+
+## Cache Location
+
+Metadata (artwork URLs & track links) is cached at:
+
+```
+~/Library/Caches/Skyline23/applepie_rpc/applepie_cache.db
 ```
