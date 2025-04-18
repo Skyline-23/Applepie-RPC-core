@@ -17,6 +17,8 @@ import shelve
 
 import subprocess
 import os
+import shutil
+import stat
 from appdirs import user_cache_dir  # pip install appdirs
 
 # Persistent cache for track extras
@@ -44,6 +46,42 @@ import logging
 logging.basicConfig(
     level=logging.INFO, format="[%(asctime)s] %(levelname)s:%(message)s"
 )
+
+
+def get_atvscript_executable() -> str:
+    """
+    Return a writable, executable copy of the atvscript binary.
+    """
+    # Determine embedded location and target path
+    base = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
+    embedded = os.path.join(base, "atvscript")
+    target = os.path.join(cache_dir, "atvscript")
+    logging.debug(
+        f"get_atvscript_executable: base={base}, embedded={embedded}, target={target}"
+    )
+
+    try:
+        # Copy out of the PyInstaller temp dir into cache_dir if needed
+        if not os.path.exists(target) or os.path.getmtime(embedded) > os.path.getmtime(
+            target
+        ):
+            import shutil
+
+            logging.debug(
+                "Copying atvscript from embedded to target as update is needed."
+            )
+            shutil.copy2(embedded, target)
+        # Ensure it is executable
+        os.chmod(target, 0o755)
+        logging.debug(f"Permissions set for {target}, returning executable path.")
+    except Exception as e:
+        logging.warning(f"Unable to copy or chmod atvscript: {e}")
+        logging.debug("Falling back to embedded atvscript due to error.")
+        # Fallback to embedded binary
+        return embedded
+
+    return target
+
 
 paused = False  # global toggle for pausing playback updates
 
@@ -287,16 +325,23 @@ async def mac_now_playing() -> Optional[dict]:
 
 
 async def atv_props(host: str) -> Optional[dict]:
-    proc = await asyncio.create_subprocess_exec(
-        "atvscript",
-        "-s",
-        host,
-        "playing",
-        "--output",
-        "json",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    logging.debug(f"atv_props called with host: {host}")
+    try:
+        exe = get_atvscript_executable()
+        logging.info(f"Resolved atvscript executable: {exe}")
+        proc = await asyncio.create_subprocess_exec(
+            exe,
+            "-s",
+            host,
+            "playing",
+            "--output",
+            "json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        logging.warning("atvscript not found—skipping Apple TV detection")
+        return None
     out, _ = await proc.communicate()
     if proc.returncode != 0 or not out:
         return None
