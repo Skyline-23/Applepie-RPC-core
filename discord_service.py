@@ -2,6 +2,12 @@ import asyncio
 import logging
 import time
 import os
+import sys
+
+# Ensure stdout/stderr support UTF-8 for print statements in embedded Python
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 from urllib.parse import quote
 from pypresence import AioPresence
 from pypresence.types import ActivityType
