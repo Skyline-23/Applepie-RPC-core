@@ -6,7 +6,7 @@ from pyatv import scan, connect, pair
 from pyatv.const import Protocol
 from pyatv.const import PairingRequirement
 from pyatv.interface import Playing
-from pyatv.storage.file_storage import FileStorage
+from pyatv.storage.file_storage import FileStorage, StorageModel
 
 # Create a persistent event loop in a background thread
 _PAIR_LOOP = asyncio.new_event_loop()
@@ -148,23 +148,44 @@ async def is_pairing_needed(host: str, protocol: Protocol = Protocol.AirPlay) ->
     Check if pairing is mandatory for the given host and protocol.
     Returns True if PairingRequirement is Mandatory, False otherwise.
     """
+    logging.debug(f"[pyatv_service] is_pairing_needed called for host={host}")
     # Ensure storage is loaded before scanning
     await STORAGE.load()
-    devices = await scan(
-        loop=_PAIR_LOOP, hosts=[host], protocol=protocol, storage=STORAGE
-    )
+    # Scan all protocols to detect device services
+    devices = await scan(loop=_PAIR_LOOP, hosts=[host], storage=STORAGE)
     if not devices:
+        logging.debug("[pyatv_service] is_pairing_needed: no devices found")
         return False
     # Pick the first device and locate its service for the protocol
     device = devices[0]
+    # Auto-select protocol: prefer Companion/MRP if present, else AirPlay
+    protocol = (
+        Protocol.Companion
+        if device.get_service(Protocol.Companion)
+        else Protocol.AirPlay
+    )
     service = device.get_service(protocol)
+    logging.debug(
+        f"[pyatv_service] Found service: {service} with credentials={getattr(service, 'credentials', None)} and pairing={service.pairing}"
+    )
     if not service:
         return False
     # If credentials already exist in storage, pairing not needed
     if getattr(service, "credentials", None):
         return False
-    # Check pairing requirement on the specific service
-    return service.pairing == PairingRequirement.Mandatory
+    # Determine pairing requirement:
+    if protocol == Protocol.AirPlay:
+        # On AirPlay, only require pairing if a password is needed
+        result = service.pairing == PairingRequirement.Mandatory and getattr(
+            service, "requires_password", False
+        )
+    else:
+        # For Companion/MRP or others, pairing is mandatory based solely on pairing flag
+        result = service.pairing == PairingRequirement.Mandatory
+    logging.debug(
+        f"[pyatv_service] is_pairing_needed result: {result} (pairing={service.pairing}, requires_password={getattr(service, 'requires_password', None)})"
+    )
+    return result
 
 
 def is_pairing_needed_sync(host: str, protocol: Protocol = Protocol.AirPlay) -> bool:
@@ -179,16 +200,21 @@ def is_pairing_needed_sync(host: str, protocol: Protocol = Protocol.AirPlay) -> 
 
 async def remove_pairing() -> bool:
     """
-    Remove stored pairing credentials for the given host and protocol.
-    Returns True if credentials existed and were removed, False otherwise.
+    Remove all stored pairing credentials and settings by clearing the entire storage.
+    Returns True if storage was non-empty and is now cleared, False if it was already empty.
     """
-    # Load current storage
-    path = os.path.expanduser("~/.pyatv.conf")
+    # Also remove the storage file on disk to ensure credentials are fully wiped
+    storage_file = STORAGE._filename  # path to ~/.pyatv.conf
     try:
-        os.remove(path)
-        return True
-    except FileNotFoundError:
-        return False
+        os.remove(storage_file)
+        logging.debug(f"Removed storage file: {storage_file}")
+    except OSError as e:
+        logging.error(f"Failed to remove storage file {storage_file}: {e}")
+    # Clear in-memory storage model so credentials are truly wiped
+    STORAGE.storage_model = StorageModel(
+        version=STORAGE.storage_model.version, devices=[]
+    )
+    return True
 
 
 def remove_pairing_sync() -> bool:
