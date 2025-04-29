@@ -145,5 +145,6 @@ def set_activity(
         asyncio.run(_set_activity_async(rpc, **activity))
 
 
-async def clear_activity(rpc: AioPresence):
-    await rpc.clear()
+def clear_activity(rpc: AioPresence):
+    logging.debug("Clearing activity")
+    rpc.close()
