@@ -1,8 +1,10 @@
 import asyncio
 import threading
 import logging
+import os
 from pyatv import scan, connect, pair
 from pyatv.const import Protocol
+from pyatv.const import PairingRequirement
 from pyatv.interface import Playing
 from pyatv.storage.file_storage import FileStorage
 
@@ -100,7 +102,7 @@ async def pair_device_begin(host: str) -> bool:
     if not target:
         logging.error(f"No device found at {host}")
         return False
-    pairing = await pair(target, protocol, loop, storage=STORAGE)
+    pairing = await pair(target, protocol, loop, storage=STORAGE, name="Applepie-RPC")
     await pairing.begin()
     PAIRINGS[host] = pairing
     return True
@@ -138,4 +140,60 @@ def pair_device_finish_sync(host: str, pin: int) -> str | None:
     Sync wrapper for pair_device_finish using a shared event loop.
     """
     future = asyncio.run_coroutine_threadsafe(pair_device_finish(host, pin), _PAIR_LOOP)
+    return future.result()
+
+
+async def is_pairing_needed(host: str, protocol: Protocol = Protocol.AirPlay) -> bool:
+    """
+    Check if pairing is mandatory for the given host and protocol.
+    Returns True if PairingRequirement is Mandatory, False otherwise.
+    """
+    # Ensure storage is loaded before scanning
+    await STORAGE.load()
+    devices = await scan(
+        loop=_PAIR_LOOP, hosts=[host], protocol=protocol, storage=STORAGE
+    )
+    if not devices:
+        return False
+    # Pick the first device and locate its service for the protocol
+    device = devices[0]
+    service = device.get_service(protocol)
+    if not service:
+        return False
+    # If credentials already exist in storage, pairing not needed
+    if getattr(service, "credentials", None):
+        return False
+    # Check pairing requirement on the specific service
+    return service.pairing == PairingRequirement.Mandatory
+
+
+def is_pairing_needed_sync(host: str, protocol: Protocol = Protocol.AirPlay) -> bool:
+    """
+    Synchronous wrapper around is_pairing_needed.
+    """
+    future = asyncio.run_coroutine_threadsafe(
+        is_pairing_needed(host, protocol), _PAIR_LOOP
+    )
+    return future.result()
+
+
+async def remove_pairing() -> bool:
+    """
+    Remove stored pairing credentials for the given host and protocol.
+    Returns True if credentials existed and were removed, False otherwise.
+    """
+    # Load current storage
+    path = os.path.expanduser("~/.pyatv.conf")
+    try:
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def remove_pairing_sync() -> bool:
+    """
+    Synchronous wrapper around remove_pairing.
+    """
+    future = asyncio.run_coroutine_threadsafe(remove_pairing(), _PAIR_LOOP)
     return future.result()
