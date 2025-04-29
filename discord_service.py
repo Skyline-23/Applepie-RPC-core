@@ -18,7 +18,6 @@ LARGE_IMAGE = "appicon"
 # Enable debug-level logging for this module
 logging.basicConfig(level=logging.DEBUG)
 
-
 # ─── Monkey‑patch AioPresence to add async set_activity (like sync Client) ──
 import uuid
 
