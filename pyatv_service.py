@@ -20,6 +20,17 @@ STORAGE = FileStorage.default_storage(_PAIR_LOOP)
 # Enable debug-level logging for this module
 logging.basicConfig(level=logging.DEBUG)
 
+# Log pyatv library version at startup
+try:
+    from importlib.metadata import version, PackageNotFoundError
+
+    pyatv_version = version("pyatv")
+    logging.info(f"pyatv version: {pyatv_version}")
+except PackageNotFoundError:
+    logging.error("Failed to retrieve pyatv version: pyatv package not found")
+except Exception as e:
+    logging.error(f"Failed to retrieve pyatv version: {e}")
+
 
 async def atv_props(ip: str, credentials: str | None = None) -> dict | None:
     """
@@ -92,20 +103,39 @@ async def pair_device_begin(host: str) -> bool:
     """
     Start pairing with Apple TV at given host. Returns True if initiation succeeded.
     """
-    protocol = Protocol.AirPlay
     # Strip port if included
-    timeout = 5
+    # Ensure storage is loaded before scanning
+    await STORAGE.load()
     loop = _PAIR_LOOP
-    devices = await scan(loop=loop, hosts=[host], protocol=protocol, storage=STORAGE)
-    # Compare host string to device address
-    target = next((d for d in devices if str(d.address) == host), None)
-    if not target:
+    # Discover all protocols to pick the best one
+    devices = await scan(loop=loop, hosts=[host], storage=STORAGE)
+    if not devices:
         logging.error(f"No device found at {host}")
         return False
+    device = next((d for d in devices if str(d.address) == host), None)
+    if not device:
+        logging.error(f"No device matching host {host}")
+        return False
+    # Prefer Companion (MRP) protocol if available, else AirPlay
+    protocol = Protocol.AirPlay
+    # Now restrict scan to chosen protocol for pairing
+    devices = await scan(loop=loop, hosts=[host], protocol=protocol, storage=STORAGE)
+    target = next((d for d in devices if str(d.address) == host), None)
+    if not target:
+        logging.error(f"No device found at {host} (protocol {protocol})")
+        return False
     pairing = await pair(target, protocol, loop, storage=STORAGE, name="Applepie-RPC")
-    await pairing.begin()
-    PAIRINGS[host] = pairing
-    return True
+    try:
+        await pairing.begin()
+    except Exception as e:
+        logging.error(f"Pairing begin failed for {host}: {e}")
+        # Ensure session is closed on failure
+        await pairing.close()
+        return False
+    else:
+        # Store session for later finish
+        PAIRINGS[host] = pairing
+        return True
 
 
 async def pair_device_finish(host: str, pin: int) -> str | None:
@@ -116,14 +146,18 @@ async def pair_device_finish(host: str, pin: int) -> str | None:
     if not pairing:
         logging.error(f"No pairing session for host {host}")
         return None
-    pairing.pin(pin)
-    await pairing.finish()
-    success = pairing.has_paired
-    await pairing.close()
-    if success:
-        # Persist new pairing credentials to disk
-        await STORAGE.save()
-        return pairing.service.credentials
+    try:
+        pairing.pin(pin)
+        await pairing.finish()
+        if pairing.has_paired:
+            # Persist new credentials
+            await STORAGE.save()
+            return pairing.service.credentials
+    except Exception as e:
+        logging.error(f"Pairing finish failed for {host}: {e}")
+    finally:
+        # Always close session
+        await pairing.close()
     return None
 
 
@@ -140,6 +174,35 @@ def pair_device_finish_sync(host: str, pin: int) -> str | None:
     Sync wrapper for pair_device_finish using a shared event loop.
     """
     future = asyncio.run_coroutine_threadsafe(pair_device_finish(host, pin), _PAIR_LOOP)
+    return future.result()
+
+
+async def cancel_pairing(host: str) -> bool:
+    """
+    Cancel an ongoing pairing session for the given host.
+    Closes and removes the pairing object without completing it.
+    """
+    pairing = PAIRINGS.pop(host, None)
+    if not pairing:
+        logging.debug(f"No pairing session to cancel for {host}")
+        return False
+    try:
+        await pairing.close()
+        logging.debug(f"Cancelled pairing session for {host}")
+        # After cancellation, clear any stored pairing credentials
+        await remove_pairing()
+        logging.debug(f"Cleared stored pairing credentials after cancel for {host}")
+        return True
+    except Exception as e:
+        logging.error(f"Error cancelling pairing for {host}: {e}")
+        return False
+
+
+def cancel_pairing_sync(host: str) -> bool:
+    """
+    Synchronous wrapper around cancel_pairing.
+    """
+    future = asyncio.run_coroutine_threadsafe(cancel_pairing(host), _PAIR_LOOP)
     return future.result()
 
 
@@ -203,6 +266,10 @@ async def remove_pairing() -> bool:
     Remove all stored pairing credentials and settings by clearing the entire storage.
     Returns True if storage was non-empty and is now cleared, False if it was already empty.
     """
+    # Log current stored pairings before removal
+    await STORAGE.load()
+    current = [device for device in STORAGE.storage_model.devices]
+    logging.info(f"remove_pairing: existing devices before clear: {current}")
     # Also remove the storage file on disk to ensure credentials are fully wiped
     storage_file = STORAGE._filename  # path to ~/.pyatv.conf
     try:
@@ -214,6 +281,9 @@ async def remove_pairing() -> bool:
     STORAGE.storage_model = StorageModel(
         version=STORAGE.storage_model.version, devices=[]
     )
+    # Verify storage_model after clear
+    cleared = [device.identifier for device in STORAGE.storage_model.devices]
+    logging.info(f"remove_pairing: devices after clear: {cleared}")
     return True
 
 
